@@ -210,8 +210,6 @@ def get_top_image(args):
     """ Get the top-20 images with highest responses per prototype, 
      and save the results as a pickle for downstream visualization purposes.
     """
-    # tensorboard initialization
-    log_writer = SummaryWriter(log_dir=args.log_dir)
 
     misc.init_distributed_mode(args)
 
@@ -380,7 +378,7 @@ def get_nsd_latent(args):
 
     # all_dataset = NSD_feat(args.feat_path)
 
-    all_dataset = ImageNet_Feature(args.imagenet_path,
+    all_dataset = ImageNet_Feature(args.feat_path,
                     'all', sampled_img_num=500) # sample 500 images per category for faster training
     
 
