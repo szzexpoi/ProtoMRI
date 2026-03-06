@@ -117,6 +117,9 @@ def main(args):
     train_dataset = COCO_feat(args.feat_path, split='train')
     val_dataset = COCO_feat(args.feat_path, split='val')
 
+    # train_dataset = ImageNet_Feature(args.feat_path,
+    #                 'train', sampled_img_num=500)
+    # val_dataset = ImageNet_Feature(args.feat_path, split='val')
 
     # code for distributed training, borrowed from MAE repo
     if args.distributed:  # args.distributed
@@ -184,7 +187,7 @@ def main(args):
                                         loss_scaler, log_writer, args,
                                        )
         
-        if (epoch+1)%10 == 0:
+        if (epoch+1)%5 == 0:
             cur_score = evaluate(epoch, iteration, model, 
                                 data_loader_val, device, 
                                 log_writer, args)
@@ -376,10 +379,10 @@ def get_nsd_latent(args):
     device = torch.device(args.device)
     cudnn.benchmark = True
 
-    # all_dataset = NSD_feat(args.feat_path)
+    all_dataset = NSD_feat(args.feat_path)
 
-    all_dataset = ImageNet_Feature(args.feat_path,
-                    'all', sampled_img_num=500) # sample 500 images per category for faster training
+    # all_dataset = ImageNet_Feature(args.feat_path,
+    #                 'all', sampled_img_num=500) # sample 500 images per category for faster training
     
 
     data_loader = torch.utils.data.DataLoader(
@@ -426,7 +429,8 @@ def get_nsd_latent(args):
         # Create string datasets
         str_dt = h5py.string_dtype(encoding="utf-8")
         dset_names = h5f.create_dataset("names", shape=(num_samples,), dtype=str_dt)
-        dset_category = h5f.create_dataset("subjects", shape=(num_samples,), dtype=str_dt)
+        # dset_category = h5f.create_dataset("subjects", shape=(num_samples,), dtype=str_dt)
+        dset_category = h5f.create_dataset("categories", shape=(num_samples,), dtype=str_dt)
 
         idx = 0
 

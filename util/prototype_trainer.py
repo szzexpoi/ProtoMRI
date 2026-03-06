@@ -27,6 +27,7 @@ def single_epoch_training(iteration: int, model: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, (visual_data, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    # for data_iter_step, (visual_data, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # we use a per iteration (instead of per epoch) lr scheduler
         lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
@@ -84,6 +85,8 @@ def evaluate(cur_epoch, iteration, model, data_loader,
     total = 0
 
     for batch_idx, (visual_data, _) in enumerate(data_loader):
+    # for batch_idx, (visual_data, _, _) in enumerate(data_loader):
+
         visual_data = visual_data.to(device, non_blocking=True).float()
         visual_pred = model(visual_data)
 

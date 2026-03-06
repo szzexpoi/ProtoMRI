@@ -49,7 +49,7 @@ def single_epoch_training(iteration: int, model: torch.nn.Module,
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
 
-    for data_iter_step, (proto_data, mri_data) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, (proto_data, mri_data, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # we use a per iteration (instead of per epoch) lr scheduler
         lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
@@ -113,7 +113,7 @@ def evaluate(cur_epoch, iteration, model, data_loader,
     record_pearson = 0
     total = 0
 
-    for batch_idx, (proto_data, mri_data) in enumerate(data_loader):
+    for batch_idx, (proto_data, mri_data, _) in enumerate(data_loader):
         proto_data = proto_data.to(device, non_blocking=True).float()
         mri_data = mri_data.to(device, non_blocking=True).float()
         mri_pred = model(proto_data)
@@ -129,4 +129,4 @@ def evaluate(cur_epoch, iteration, model, data_loader,
     log_writer.add_scalar('Validation Pearson', record_pearson.item(), iteration)
     print("Validation MSE:", record_loss.item())
     print("Validation Pearson:", record_pearson.item())
-    return record_loss.item()
+    return record_pearson.item()

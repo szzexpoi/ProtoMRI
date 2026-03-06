@@ -214,17 +214,18 @@ class DinoPro_slim(nn.Module):
                                                 is_causal=True,
                                             )
                                             for _ in range(encoder_depth)])     
-        
-        self.decoder = nn.ModuleList([CausalSelfAttentionBlock(
-                                                dim=decoder_dim,
-                                                num_heads=num_head,
-                                                ffn_ratio=4.0,
-                                                norm_layer=partial(nn.LayerNorm, eps=1e-6),
-                                                act_layer=nn.GELU,
-                                                ls_init_value=None,
-                                                is_causal=True,
-                                            )
-                                            for _ in range(decoder_depth)])     
+        self.decoder_depth = decoder_depth
+        if decoder_depth > 0:
+            self.decoder = nn.ModuleList([CausalSelfAttentionBlock(
+                                                    dim=decoder_dim,
+                                                    num_heads=num_head,
+                                                    ffn_ratio=4.0,
+                                                    norm_layer=partial(nn.LayerNorm, eps=1e-6),
+                                                    act_layer=nn.GELU,
+                                                    ls_init_value=None,
+                                                    is_causal=True,
+                                                )
+                                                for _ in range(decoder_depth)])     
 
         # simple fixed latents for positional embedding
         self.pos_embedding = nn.Parameter(torch.randn(1, 64, decoder_dim), requires_grad=False)
@@ -263,8 +264,9 @@ class DinoPro_slim(nn.Module):
         x_p = einsum('b n p, p c -> b n c', proto_sim, self.prototypes.weight) # (b, n, decoder_dim)
 
         # use the transformed features for next-patch prediction (maybe stick to simple/shallow decoder to encourage discriminative prototypes)
-        for block in self.decoder:
-            x_p = block(x_p)
+        if self.decoder_depth > 0:
+            for block in self.decoder:
+                x_p = block(x_p)
         visual_pred = self.visual_readout(x_p)
 
         return visual_pred
@@ -308,9 +310,10 @@ class DinoPro_slim(nn.Module):
         # transform the original features into a weighted sum of prototypes
         x_p = einsum('b n p, p c -> b n c', proto_sim, self.prototypes.weight) # (b, n, decoder_dim)
 
-        # # use the transformed features for next-patch prediction (maybe stick to simple/shallow decoder to encourage discriminative prototypes)
+        # # # use the transformed features for next-patch prediction (maybe stick to simple/shallow decoder to encourage discriminative prototypes)
         # for block in self.decoder:
         #     x_p = block(x_p)
+
         # visual_pred = self.visual_readout(x_p)
 
         return x_p

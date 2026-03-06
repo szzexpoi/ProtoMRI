@@ -130,29 +130,122 @@ class NSD_proto(torch.utils.data.Dataset):
                 valid_voxels = np.where(cur_roi==patch_id)[0]
 
             raw_data.append(cur_data[:, valid_voxels])
+            
         raw_data = np.concatenate(raw_data, axis=-1) # concatenate left and right hemisphere together
         self.num_voxels = raw_data.shape[-1]
         proto_sim = pickle.load(open(os.path.join(proto_dir, subj_name+'.pkl'), 'rb')) # (N, n, num_prototypes)
 
         # get the index mapping between proto_sim and raw_data
         img_name = proto_sim['image_name'] # (N,)
+        raw_name = img_name
         img_name = [int(name.split('_')[0].split('-')[1])-1 for name in img_name]
         raw2proto_idx = {cur:idx for idx, cur in enumerate(img_name)}
     
-        # generate train and test split
-        train_idx, test_idx = train_test_split(img_name, test_size=0.2, random_state=seed)
-        
-        if split == 'train':
-            self.raw_data = raw_data[train_idx] # (N_train, num_voxels)
-            self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in train_idx]] # (N_train, n, num_prototypes)
-        else:
-            self.raw_data = raw_data[test_idx] # (N_test, num_voxels)
-            self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in test_idx]] # (N_test, n, num_prototypes)
+        if split == 'all':
+            self.raw_data = raw_data[img_name]
+            self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in img_name]] 
+            self.raw_name = raw_name
+        else:    
+            img2raw = dict()
+            for i in range(len(img_name)):
+                img2raw[img_name[i]] = raw_name[i]
+
+            # generate train and test split
+            train_idx, test_idx = train_test_split(img_name, test_size=0.2, random_state=seed)
+            
+            if split == 'train':
+                self.raw_data = raw_data[train_idx] # (N_train, num_voxels)
+                self.raw_name = [img2raw[cur] for cur in train_idx]
+                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in train_idx]] # (N_train, n, num_prototypes)
+            else:
+                self.raw_data = raw_data[test_idx] # (N_test, num_voxels)
+                self.raw_name = [img2raw[cur] for cur in test_idx]
+                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in test_idx]] # (N_test, n, num_prototypes)
 
         print('%s voxels selected and %d samples for %s split' %(self.num_voxels, len(self.raw_data), split))
 
     def __getitem__(self, index):
-        return self.proto_sim[index], self.raw_data[index]
+        return self.proto_sim[index], self.raw_data[index], self.raw_name[index]
+
+    def __len__(self):
+        return len(self.raw_data)
+
+class NSD_proto_multiple(torch.utils.data.Dataset):
+    """
+    Dataset for learning the mapping between prototype similarity and voxel activations for NSD data. 
+    This version is for learning the mapping to multiple brain areas (and for downstream clustering).
+    """
+    def __init__(self, proto_dir, nsd_dir, subj_name, area_name, patch_name, seed=42, split='train', hemi='lh'):
+        
+        raw_data = []
+        self.voxel_name = []
+
+        cur_data = np.load(os.path.join(nsd_dir, subj_name, 
+                        'training_split', 'training_fmri', 
+                            f'{hemi}_training_fmri.npy'))
+        
+        all_valid_voxel = []
+        for area_idx, cur_area in enumerate(area_name): 
+
+            cur_roi = np.load(os.path.join(nsd_dir, subj_name, 
+                            'roi_masks', 
+                            hemi+'.floc-'+cur_area+'_challenge_space.npy'))
+            cur_mapping = np.load(os.path.join(nsd_dir, subj_name, 
+                            'roi_masks', 
+                            'mapping_floc-'+cur_area+'.npy'), allow_pickle=True).item()
+
+            patch2id = {cur_mapping[k]:k for k in cur_mapping.keys()}
+
+            if patch_name[area_idx] == 'FFA':
+                patch_id = []
+                for id in ['-1', '-2']:
+                    cur_patch = patch2id[patch_name[area_idx]+id]
+                    patch_id.extend(cur_patch)
+            else:
+                patch_id = patch2id[patch_name[area_idx]]
+            valid_voxels = np.where(cur_roi==patch_id)[0]
+            all_valid_voxel.extend(valid_voxels)
+            self.voxel_name.extend([patch_name[area_idx]]*len(valid_voxels))
+        
+        all_valid_voxel = np.array(all_valid_voxel)
+        self.voxel_index = all_valid_voxel
+        raw_data.append(cur_data[:, all_valid_voxel])
+
+        raw_data = np.concatenate(raw_data, axis=-1) # concatenate left and right hemisphere together
+        self.num_voxels = raw_data.shape[-1]
+        proto_sim = pickle.load(open(os.path.join(proto_dir, subj_name+'.pkl'), 'rb')) # (N, n, num_prototypes)
+
+        # get the index mapping between proto_sim and raw_data
+        img_name = proto_sim['image_name'] # (N,)
+        raw_name = img_name
+        img_name = [int(name.split('_')[0].split('-')[1])-1 for name in img_name]
+        raw2proto_idx = {cur:idx for idx, cur in enumerate(img_name)}
+    
+        if split == 'all':
+            self.raw_data = raw_data[img_name]
+            self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in img_name]] 
+            self.raw_name = raw_name
+        else:    
+            img2raw = dict()
+            for i in range(len(img_name)):
+                img2raw[img_name[i]] = raw_name[i]
+
+            # generate train and test split
+            train_idx, test_idx = train_test_split(img_name, test_size=0.2, random_state=seed)
+            
+            if split == 'train':
+                self.raw_data = raw_data[train_idx] # (N_train, num_voxels)
+                self.raw_name = [img2raw[cur] for cur in train_idx]
+                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in train_idx]] # (N_train, n, num_prototypes)
+            else:
+                self.raw_data = raw_data[test_idx] # (N_test, num_voxels)
+                self.raw_name = [img2raw[cur] for cur in test_idx]
+                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in test_idx]] # (N_test, n, num_prototypes)
+
+        print('%s voxels selected and %d samples for %s split' %(self.num_voxels, len(self.raw_data), split))
+
+    def __getitem__(self, index):
+        return self.proto_sim[index], self.raw_data[index], self.raw_name[index]
 
     def __len__(self):
         return len(self.raw_data)
@@ -198,7 +291,7 @@ class ImageNet_Feature(torch.utils.data.Dataset):
         # load feature
         img_feat = _load_mmap(img_name+'.npy', os.path.dirname(cur_feat_path))
 
-        return img_feat, cur_cat, img_name 
+        return img_feat, img_name, cur_cat 
 
     def __len__(self):
         return len(self.all_img)
