@@ -158,10 +158,6 @@ def main(args):
         shuffle=False
     )  
 
-    # model = DinoPro(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
-    #                 decoder_depth=args.decoder_depth, num_head=args.num_heads, 
-    #                 num_prototypes=args.num_prototype, topk=args.topk)
-
     model = DinoPro_slim(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
                     decoder_depth=args.decoder_depth, num_head=args.num_heads, 
                     num_prototypes=args.num_prototype, topk=args.topk)
@@ -235,10 +231,6 @@ def get_top_image(args):
         shuffle=False
     )  
 
-    # model = DinoPro(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
-    #                 decoder_depth=args.decoder_depth, num_head=args.num_heads, 
-    #                 num_prototypes=args.num_prototype, topk=args.topk)
-
     model = DinoPro_slim(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
                     decoder_depth=args.decoder_depth, num_head=args.num_heads, 
                     num_prototypes=args.num_prototype, topk=args.topk)
@@ -265,24 +257,8 @@ def get_top_image(args):
     topk_idx = np.argsort(avg_response, axis=0)[::-1][:args.candidate_image, :] # (topk, num_prototypes)
     topk_image_name = record_image_name[topk_idx] # (topk, num_prototypes)
 
-    # run clip score clustering
+    # run clip score clustering (optional, if you want to disable it, simply comment it out and set candidate_image to 20)
     topk_image_name = clipscore_clustering(topk_image_name, args.top_image, args.image_path)
-
-    # # max instead of average for finding the top-k images
-    # topk = top_image  # number of images to select per prototype
-    # max_response = record_feat.max(axis=1)   # (M, num_prototypes)
-    # top5_proto_idx = np.argsort(max_response, axis=1)[:, -5:]  # (M, 5)
-    # M, N = max_response.shape
-    # mask = np.zeros((M, N), dtype=bool)
-    # rows = np.arange(M)[:, None]
-    # mask[rows, top5_proto_idx] = True
-    # filtered_response = np.where(mask, max_response, -np.inf)  # (M, num_prototypes)
-    # topk_idx = np.argsort(filtered_response, axis=0)[::-1][:topk, :]  # (topk, num_prototypes)
-    # topk_image_name = record_image_name[topk_idx]  # (topk, num_prototypes)
-
-    # # reorganize the prototype based on its average activation
-    # overall_avg_response = record_feat.mean(axis=(0, 1)) # (num_prototypes,)
-    # proto_order = np.argsort(overall_avg_response)[::-1] # (num_prototypes,)
 
     # now also get the attention maps for the top-k images for each prototypes
     topk_attention_maps = []
@@ -334,9 +310,6 @@ def get_nsd_proto(args):
         shuffle=False
     )  
 
-    # model = DinoPro(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
-    #                 decoder_depth=args.decoder_depth, num_head=args.num_heads, 
-    #                 num_prototypes=args.num_prototype, topk=args.topk)
     model = DinoPro_slim(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
                     decoder_depth=args.decoder_depth, num_head=args.num_heads, 
                     num_prototypes=args.num_prototype, topk=args.topk)
@@ -368,8 +341,8 @@ def get_nsd_proto(args):
         with open(os.path.join(args.log_dir, 'nsd_proto', subj_name+'.pkl'), 'wb') as f:
             pickle.dump(save_pkl, f)
 
-def get_nsd_latent(args):
-    """ Get latent features for NSD data, for training the pixel readout models.
+def get_pixel_latent(args):
+    """ Get latent features for training the pixel reconstruction models.
     """
     misc.init_distributed_mode(args)
 
@@ -379,10 +352,11 @@ def get_nsd_latent(args):
     device = torch.device(args.device)
     cudnn.benchmark = True
 
-    all_dataset = NSD_feat(args.feat_path)
+    # all_dataset = NSD_feat(args.feat_path)
 
-    # all_dataset = ImageNet_Feature(args.feat_path,
-    #                 'all', sampled_img_num=500) # sample 500 images per category for faster training
+    # train the model on ImageNet as COCO does not have sufficient data
+    all_dataset = ImageNet_Feature(args.feat_path,
+                    'all', sampled_img_num=500) # sample 500 images per category for faster training
     
 
     data_loader = torch.utils.data.DataLoader(
@@ -396,10 +370,6 @@ def get_nsd_latent(args):
         prefetch_factor=2,
         shuffle=False
     )  
-
-    # model = DinoPro(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
-    #                 decoder_depth=args.decoder_depth, num_head=args.num_heads, 
-    #                 num_prototypes=args.num_prototype, topk=args.topk)
 
     model = DinoPro_slim(decoder_dim=args.decoder_dim, encoder_depth=args.encoder_depth, 
                     decoder_depth=args.decoder_depth, num_head=args.num_heads, 
@@ -417,12 +387,12 @@ def get_nsd_latent(args):
 
     with h5py.File(h5_path, "w") as h5f:
 
-        # Create feature dataset: 80k × 256 × 768
+        # Create feature dataset: 500k × 64 × proto
         dset_features = h5f.create_dataset(
             "features",
-            shape=(num_samples, 64, 768),
+            shape=(num_samples, 64, args.num_prototype),
             dtype="float32",
-            chunks=(1, 64, 768),
+            chunks=(1, 64, args.num_prototype),
             compression="lzf"
         )
 
@@ -445,10 +415,11 @@ def get_nsd_latent(args):
                 visual_data = visual_data.to(device, non_blocking=True).float()
 
                 # Run inference in the MAIN PROCESS — safe
-                proto_latent = model.get_latents(visual_data)
+                # proto_latent = model.get_latents(visual_data)
+                proto_latent = model.get_prototype_similarity(visual_data) # for causal intervention
 
                 # Move back to CPU for writing
-                proto_latent = proto_latent.cpu().numpy()   # shape (B, 256, 768)
+                proto_latent = proto_latent.cpu().numpy()   # shape (B, 64, proto)
 
                 # Write into HDF5 (main process only)
                 dset_features[idx:idx + B, :, :] = proto_latent
@@ -465,5 +436,5 @@ if __name__ == '__main__':
         get_top_image(args)
     elif args.mode == 'get_nsd_proto':
         get_nsd_proto(args)
-    elif args.mode == 'get_nsd_latent':
-        get_nsd_latent(args)
+    elif args.mode == 'get_pixel_latent':
+        get_pixel_latent(args)

@@ -295,3 +295,52 @@ class ImageNet_Feature(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.all_img)
+
+class ImageNet_proto(torch.utils.data.Dataset):
+    """
+    Dataset for loading pre-extracted imagenet prototype for causal intervention
+    """
+    def __init__(self, latent_file, split='train'):
+        self.split = split
+        self.h5_path = latent_file
+        self.h5_file = None  # opened lazily per worker
+
+        # Read metadata (no heavy loading)
+        with h5py.File(self.h5_path, "r") as f:
+            self.length = f["features"].shape[0]
+            all_name = f["names"][:]            
+
+            invalid_indices = []
+            for idx, name in enumerate(all_name):
+                if len(name.decode("utf-8"))<2:
+                    invalid_indices.append(idx)
+
+            if split == 'train':
+                self.valid_indices = [i for i in range(self.length) if not 'val' in all_name[i].decode("utf-8") and i not in invalid_indices]
+            else:
+                self.valid_indices = [i for i in range(self.length) if 'val' in all_name[i].decode("utf-8") and i not in invalid_indices]
+
+        print("%d samples for %s split" % (len(self.valid_indices), split))
+
+    def __len__(self):
+        return len(self.valid_indices)
+    
+    def _ensure_open(self):
+        """Open the file when accessed from a worker process."""
+        if self.h5_file is None:
+            self.h5_file = h5py.File(self.h5_path, "r")
+
+    def __getitem__(self, idx):
+        self._ensure_open()
+        f = self.h5_file
+        idx = self.valid_indices[idx]
+        # Read one sample (fast, chunked)
+        feature = f["features"][idx]           # numpy (64, 768)
+        name = f["names"][idx].decode("utf-8")
+        category = f["categories"][idx].decode("utf-8")
+        # Convert features to torch tensor
+        feature = torch.tensor(feature, dtype=torch.float32)
+
+
+        return feature, category, category+'+'+name
+    

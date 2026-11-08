@@ -34,8 +34,8 @@ def single_epoch_training(iteration: int, model: torch.nn.Module,
         visual_data = visual_data.to(device, non_blocking=True).float()        
         visual_pred = model(visual_data)
 
-        # # loss = F.mse_loss(visual_pred[:, :-1], visual_data[:, 1:])
-        # loss = F.mse_loss(visual_pred, visual_data)
+        # loss = F.mse_loss(visual_pred[:, :-1], visual_data[:, 1:])
+        # # loss = F.mse_loss(visual_pred, visual_data)
 
         # for downsampled latent
         patched_visual = rearrange(visual_data, 'b (h w) d -> b h w d', h = 16, w=16)
