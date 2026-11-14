@@ -108,10 +108,21 @@ class NSD_proto(torch.utils.data.Dataset):
     """
     Dataset for learning the mapping between prototype similarity and voxel activations for NSD data. 
     """
-    def __init__(self, proto_dir, nsd_dir, subj_name, area_name, patch_name, seed=42, split='train'):
+    def __init__(self, proto_dir, nsd_dir, subj_name, area_name, patch_name, seed=42, split='train',
+                 use_raw_feat=False, raw_feat_dir=None, selected_hemi=None, is_pca=False):
         
         raw_data = []
-        for hemi in ['lh', 'rh']:
+        self.use_raw_feat = use_raw_feat
+        self.raw_feat_dir = raw_feat_dir
+        self.subj_name = subj_name
+        self.is_pca = is_pca
+
+        if selected_hemi is None:
+            selected_hemi = ['lh', 'rh']
+        else:
+            selected_hemi = [selected_hemi]
+
+        for hemi in selected_hemi:
             cur_data = np.load(os.path.join(nsd_dir, subj_name, 
                             'training_split', 'training_fmri', 
                              f'{hemi}_training_fmri.npy'))
@@ -150,22 +161,48 @@ class NSD_proto(torch.utils.data.Dataset):
             for i in range(len(img_name)):
                 img2raw[img_name[i]] = raw_name[i]
 
-            # generate train and test split
-            train_idx, test_idx = train_test_split(img_name, test_size=0.2, random_state=seed)
-            
+            # generate train, val, test split
+            train_idx, temp_idx = train_test_split(
+                img_name,
+                test_size=0.2,
+                random_state=seed
+            )
+
+            # Split temp into 10% val, 10% test
+            val_idx, test_idx = train_test_split(
+                temp_idx,
+                test_size=0.5,
+                random_state=seed
+            )
+
             if split == 'train':
-                self.raw_data = raw_data[train_idx] # (N_train, num_voxels)
-                self.raw_name = [img2raw[cur] for cur in train_idx]
-                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in train_idx]] # (N_train, n, num_prototypes)
+                cur_split_id = train_idx
+            elif split == 'val':
+                cur_split_id = val_idx
             else:
-                self.raw_data = raw_data[test_idx] # (N_test, num_voxels)
-                self.raw_name = [img2raw[cur] for cur in test_idx]
-                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in test_idx]] # (N_test, n, num_prototypes)
+                cur_split_id = test_idx
+
+            self.raw_data = raw_data[cur_split_id] # (N_train, num_voxels)
+            self.raw_name = [img2raw[cur] for cur in cur_split_id]
+            self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in cur_split_id]] # (N_train, n, num_prototypes)
 
         print('%s voxels selected and %d samples for %s split' %(self.num_voxels, len(self.raw_data), split))
 
+        if self.is_pca:
+            print('Using PCA on DINO features')
+            pca_model = './pca_weight_256.joblib'
+            self.pca = joblib.load(pca_model)
+
     def __getitem__(self, index):
-        return self.proto_sim[index], self.raw_data[index], self.raw_name[index]
+        if not self.use_raw_feat:
+            return self.proto_sim[index], self.raw_data[index], self.raw_name[index]
+        else:
+            cur_raw_feat = np.load(os.path.join(self.raw_feat_dir, self.subj_name, self.raw_name[index]+'.npy'))
+            
+            if self.is_pca:
+                cur_raw_feat = self.pca.transform(cur_raw_feat)
+
+            return cur_raw_feat, self.raw_data[index], self.raw_name[index]
 
     def __len__(self):
         return len(self.raw_data)
