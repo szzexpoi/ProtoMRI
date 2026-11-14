@@ -268,16 +268,25 @@ class NSD_proto_multiple(torch.utils.data.Dataset):
                 img2raw[img_name[i]] = raw_name[i]
 
             # generate train and test split
-            train_idx, test_idx = train_test_split(img_name, test_size=0.2, random_state=seed)
-            
+            train_idx, temp_idx = train_test_split(img_name, test_size=0.2, random_state=seed)
+
+            # Split temp into 10% val, 10% test
+            val_idx, test_idx = train_test_split(
+                temp_idx,
+                test_size=0.5,
+                random_state=seed
+            )
+
             if split == 'train':
-                self.raw_data = raw_data[train_idx] # (N_train, num_voxels)
-                self.raw_name = [img2raw[cur] for cur in train_idx]
-                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in train_idx]] # (N_train, n, num_prototypes)
+                cur_split_id = train_idx
+            elif split == 'val':
+                cur_split_id = val_idx
             else:
-                self.raw_data = raw_data[test_idx] # (N_test, num_voxels)
-                self.raw_name = [img2raw[cur] for cur in test_idx]
-                self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in test_idx]] # (N_test, n, num_prototypes)
+                cur_split_id = test_idx
+
+            self.raw_data = raw_data[cur_split_id] # (N_train, num_voxels)
+            self.raw_name = [img2raw[cur] for cur in cur_split_id]
+            self.proto_sim = proto_sim['prototype_similarity'][[raw2proto_idx[idx] for idx in cur_split_id]] # (N_train, n, num_prototypes)
 
         print('%s voxels selected and %d samples for %s split' %(self.num_voxels, len(self.raw_data), split))
 
