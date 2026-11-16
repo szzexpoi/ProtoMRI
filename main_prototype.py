@@ -1,8 +1,3 @@
-import sys
-sys.path.append('./model')
-sys.path.append('./util')
-sys.path.append('/home/shichen/project/dinov3/')
-
 import argparse
 from random import shuffle
 import numpy as np
@@ -12,8 +7,8 @@ import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import misc
-from misc import NativeScalerWithGradNormCount as NativeScaler
+from util import misc
+from util.misc import NativeScalerWithGradNormCount as NativeScaler
 
 from model.prototype_learning import DinoPro, DinoPro_slim
 from util.dataloader import COCO_feat, worker_init_fn, NSD_feat, ImageNet_Feature
@@ -30,18 +25,18 @@ import h5py
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Master script for prototype learning with DINO v3 features',
-                                     add_help=False)
+                                     add_help=True)
     parser.add_argument('--mode', default='train', type=str,
                         help='running mode')
-    parser.add_argument('--batch_size', default=32, type=int,
+    parser.add_argument('--batch_size', default=128, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * # gpus')
-    parser.add_argument('--epochs', default=90, type=int)
+    parser.add_argument('--epochs', default=15, type=int)
 
     # Optimizer parameters
     parser.add_argument('--weight_decay', type=float, default=0,
                         help='weight decay (default: 0 for linear probe following MoCo v1)')
 
-    parser.add_argument('--lr', type=float, default=None, metavar='LR',
+    parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
                         help='learning rate (absolute lr)')
     
     parser.add_argument('--min_lr', type=float, default=0., metavar='LR',
@@ -84,7 +79,7 @@ def get_args_parser():
     # data setting
     parser.add_argument('--num_prototype', default=1000, type=int,
                         help='number of prototypes')
-    parser.add_argument('--topk', default=32, type=int,
+    parser.add_argument('--topk', default=128, type=int,
                         help='topk bottleneck for sparsity constraint')
     parser.add_argument('--decoder_dim', default=768, type=int,
                         help='dimension of encoder features')
@@ -139,10 +134,10 @@ def main(args):
         # sampler=sampler_train,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=True,
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=True
     )
 
@@ -151,10 +146,10 @@ def main(args):
         # sampler=sampler_val,
         batch_size=36,
         num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True, 
+        pin_memory=args.pin_mem,
+        drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -163,6 +158,7 @@ def main(args):
                     num_prototypes=args.num_prototype, topk=args.topk)
     model.to(device)
 
+    model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
@@ -224,10 +220,10 @@ def get_top_image(args):
         # sampler=sampler_val,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=True, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -258,7 +254,7 @@ def get_top_image(args):
     topk_image_name = record_image_name[topk_idx] # (topk, num_prototypes)
 
     # run clip score clustering (optional, if you want to disable it, simply comment it out and set candidate_image to 20)
-    topk_image_name = clipscore_clustering(topk_image_name, args.top_image, args.image_path)
+    topk_image_name = clipscore_clustering(topk_image_name, args.top_image, args.image_path, device=args.device)
 
     # now also get the attention maps for the top-k images for each prototypes
     topk_attention_maps = []
@@ -278,6 +274,7 @@ def get_top_image(args):
 
     topk_attention_maps = np.array(topk_attention_maps) # (num_prototypes, topk, 16, 16)
 
+    os.makedirs(args.log_dir, exist_ok=True)
     save_pkl = {'image_name': topk_image_name.T,
                 'attention_map': topk_attention_maps
                 }
@@ -303,10 +300,10 @@ def get_nsd_proto(args):
         # sampler=sampler_val,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -364,10 +361,10 @@ def get_pixel_latent(args):
         # sampler=sampler_val,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -383,7 +380,7 @@ def get_pixel_latent(args):
     h5_path = args.save_dir
 
     # Ensure directory exists
-    os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(h5_path)), exist_ok=True)
 
     with h5py.File(h5_path, "w") as h5f:
 

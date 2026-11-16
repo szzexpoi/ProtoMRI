@@ -3,8 +3,7 @@ import sys
 from typing import Iterable, Optional
 
 import torch
-import misc as misc
-import lr_sched as lr_sched
+from util import misc, lr_sched
 import cv2
 import os
 import numpy as np
@@ -75,7 +74,8 @@ def single_epoch_training(iteration: int, model: torch.nn.Module,
                     update_grad=True)
         optimizer.zero_grad()
 
-        torch.cuda.synchronize()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
         metric_logger.update(loss=loss_value)
         metric_logger.update(mse=mse_value)
         metric_logger.update(pearson=corr_value)

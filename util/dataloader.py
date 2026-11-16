@@ -8,10 +8,10 @@ import h5py
 from PIL import Image
 import math
 from sklearn.model_selection import train_test_split
+import joblib
 from torchvision import transforms
 from cachetools import LRUCache
 import h5py
-import mat73
 import json
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -41,11 +41,14 @@ class MemmapLRU(LRUCache):
 _memmap_feat_cached = MemmapLRU(maxsize=130)
 
 def _load_mmap(vid_name, feat_path=None):
-    if vid_name not in _memmap_feat_cached:
-        mm = np.load(os.path.join(feat_path, vid_name), mmap_mode='r')
-        _memmap_feat_cached[vid_name] = mm
+    # Include the parent folder in the cache key: two subjects may have
+    # identical image stems but different feature file paths.
+    path = os.path.abspath(os.path.join(feat_path, vid_name))
+    if path not in _memmap_feat_cached:
+        mm = np.load(path, mmap_mode='r')
+        _memmap_feat_cached[path] = mm
 
-    return _memmap_feat_cached[vid_name]
+    return _memmap_feat_cached[path]
 
 def worker_init_fn(worker_id):
     global _memmap_feat_cached
@@ -109,13 +112,20 @@ class NSD_proto(torch.utils.data.Dataset):
     Dataset for learning the mapping between prototype similarity and voxel activations for NSD data. 
     """
     def __init__(self, proto_dir, nsd_dir, subj_name, area_name, patch_name, seed=42, split='train',
-                 use_raw_feat=False, raw_feat_dir=None, selected_hemi=None, is_pca=False):
+                 use_raw_feat=False, raw_feat_dir=None, selected_hemi=None, is_pca=False,
+                 pca_weights=None):
         
         raw_data = []
         self.use_raw_feat = use_raw_feat
         self.raw_feat_dir = raw_feat_dir
         self.subj_name = subj_name
         self.is_pca = is_pca
+        if self.use_raw_feat and not self.raw_feat_dir:
+            raise ValueError('raw_feat_dir is required when use_raw_feat=True')
+        if self.is_pca and not self.use_raw_feat:
+            raise ValueError('is_pca requires use_raw_feat=True')
+        if selected_hemi not in (None, 'lh', 'rh'):
+            raise ValueError("selected_hemi must be None, 'lh', or 'rh'")
 
         if selected_hemi is None:
             selected_hemi = ['lh', 'rh']
@@ -179,8 +189,10 @@ class NSD_proto(torch.utils.data.Dataset):
                 cur_split_id = train_idx
             elif split == 'val':
                 cur_split_id = val_idx
-            else:
+            elif split == 'test':
                 cur_split_id = test_idx
+            else:
+                raise ValueError(f'Unsupported split: {split!r}')
 
             self.raw_data = raw_data[cur_split_id] # (N_train, num_voxels)
             self.raw_name = [img2raw[cur] for cur in cur_split_id]
@@ -189,9 +201,10 @@ class NSD_proto(torch.utils.data.Dataset):
         print('%s voxels selected and %d samples for %s split' %(self.num_voxels, len(self.raw_data), split))
 
         if self.is_pca:
+            if not pca_weights:
+                raise ValueError('pca_weights is required when is_pca=True')
             print('Using PCA on DINO features')
-            pca_model = './pca_weight_256.joblib'
-            self.pca = joblib.load(pca_model)
+            self.pca = joblib.load(pca_weights)
 
     def __getitem__(self, index):
         if not self.use_raw_feat:
@@ -234,13 +247,11 @@ class NSD_proto_multiple(torch.utils.data.Dataset):
             patch2id = {cur_mapping[k]:k for k in cur_mapping.keys()}
 
             if patch_name[area_idx] == 'FFA':
-                patch_id = []
-                for id in ['-1', '-2']:
-                    cur_patch = patch2id[patch_name[area_idx]+id]
-                    patch_id.extend(cur_patch)
+                patch_ids = [patch2id['FFA-1'], patch2id['FFA-2']]
+                valid_voxels = np.where(np.isin(cur_roi, patch_ids))[0]
             else:
                 patch_id = patch2id[patch_name[area_idx]]
-            valid_voxels = np.where(cur_roi==patch_id)[0]
+                valid_voxels = np.where(cur_roi == patch_id)[0]
             all_valid_voxel.extend(valid_voxels)
             self.voxel_name.extend([patch_name[area_idx]]*len(valid_voxels))
         
@@ -281,8 +292,10 @@ class NSD_proto_multiple(torch.utils.data.Dataset):
                 cur_split_id = train_idx
             elif split == 'val':
                 cur_split_id = val_idx
-            else:
+            elif split == 'test':
                 cur_split_id = test_idx
+            else:
+                raise ValueError(f'Unsupported split: {split!r}')
 
             self.raw_data = raw_data[cur_split_id] # (N_train, num_voxels)
             self.raw_name = [img2raw[cur] for cur in cur_split_id]

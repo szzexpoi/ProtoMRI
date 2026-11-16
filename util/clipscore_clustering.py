@@ -1,4 +1,5 @@
 import torch
+from contextlib import nullcontext
 from PIL import Image
 import open_clip
 import numpy as np
@@ -10,7 +11,7 @@ def spectral_topk(S, k):
     top_vec = vecs[:, np.argmax(vals)]
     return np.argsort(top_vec)[-k:]
 
-def clipscore_clustering(candidate_images, top_k=10, image_dir=None):
+def clipscore_clustering(candidate_images, top_k=10, image_dir=None, device="cuda"):
     """
     Given a small set of candidate images (within top-activated ones) for each prototype,
     find a subset of images that are similar to each other based on CLIP score,
@@ -19,7 +20,7 @@ def clipscore_clustering(candidate_images, top_k=10, image_dir=None):
 
     filtered_images = []
     model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
-    model = model.to('cuda')
+    model = model.to(device)
     model.eval()
 
     for proto_id in tqdm(range(candidate_images.shape[1]), desc="Spectral clustering for` prototypes"):
@@ -30,9 +31,10 @@ def clipscore_clustering(candidate_images, top_k=10, image_dir=None):
             img = preprocess(Image.open(os.path.join(image_dir, img_name + '.jpg')))
             images.append(img)
 
-        images = torch.stack(images).to('cuda')
+        images = torch.stack(images).to(device)
 
-        with torch.no_grad(), torch.autocast("cuda"):
+        amp_context = torch.autocast("cuda") if str(device).startswith("cuda") else nullcontext()
+        with torch.no_grad(), amp_context:
             features = model.encode_image(images)
             features = features / features.norm(dim=-1, keepdim=True)
 

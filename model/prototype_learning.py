@@ -1,14 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.models.vision_transformer import Block
 import numpy as np
 from einops import rearrange, repeat, unpack, pack
 from torch import einsum
 from einops.layers.torch import Rearrange
-import sys
-sys.path.append('/home/shichen/project/dinov3/')
-from dinov3.layers import SelfAttentionBlock, CausalSelfAttentionBlock, Mlp, LayerScale
+from dinov3.layers import CausalSelfAttentionBlock
 from functools import partial
 
 def exists(val):

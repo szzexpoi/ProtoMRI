@@ -1,8 +1,3 @@
-import sys
-sys.path.append('./model')
-sys.path.append('./util')
-sys.path.append('/home/shichen/project/dinov3/')
-
 import argparse
 from random import random, shuffle
 import numpy as np
@@ -12,10 +7,10 @@ import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import misc
-from misc import NativeScalerWithGradNormCount as NativeScaler
+from util import misc
+from util.misc import NativeScalerWithGradNormCount as NativeScaler
 
-from model.proto2mri import Proto2MRI, Proto2MRI_conv, Dino2MRI_conv
+from model.proto2mri import Proto2MRI, Proto2MRI_conv
 from model.prototype_learning import DinoPro_slim
 from util.dataloader import worker_init_fn, NSD_proto, NSD_proto_multiple, ImageNet_proto
 from util.proto2mri_trainer import single_epoch_training, evaluate, pearson_corr_loss
@@ -31,18 +26,18 @@ import json
 from einops import rearrange
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Master script for learning the mapping from prototype space to MRI space', add_help=False)
+    parser = argparse.ArgumentParser('Master script for learning the mapping from prototype space to MRI space', add_help=True)
     parser.add_argument('--mode', default='train', type=str,
                         help='running mode')
     parser.add_argument('--batch_size', default=32, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * # gpus')
-    parser.add_argument('--epochs', default=90, type=int)
+    parser.add_argument('--epochs', default=20, type=int)
 
     # Optimizer parameters
     parser.add_argument('--weight_decay', type=float, default=0,
                         help='weight decay (default: 0 for linear probe following MoCo v1)')
 
-    parser.add_argument('--lr', type=float, default=None, metavar='LR',
+    parser.add_argument('--lr', type=float, default=1e-2, metavar='LR',
                         help='learning rate (absolute lr)')
     
     parser.add_argument('--min_lr', type=float, default=0., metavar='LR',
@@ -119,8 +114,10 @@ def get_args_parser():
     parser.add_argument('--use_raw_feat', action='store_true',
                         help='predicting fmri with dino feature instead of proto sim for baseline')
     parser.add_argument('--raw_feat_dir', default=None, type=str,
-                        help='raw feature directory')        
+                        help='raw feature directory')
     parser.add_argument('--is_pca', action='store_true')
+    parser.add_argument('--pca_weights', default=None, type=str,
+                        help='path to a fitted PCA .joblib file (only with --is_pca)')
     return parser.parse_args()
 
 def main(args):
@@ -136,9 +133,11 @@ def main(args):
     cudnn.benchmark = True
 
     train_dataset = NSD_proto(args.proto_dir, args.mri_dir, args.subject, args.area_name, args.patch_name, seed=args.seed, split='train',
-                              use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca)
+                              use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca,
+                            pca_weights=args.pca_weights)
     val_dataset = NSD_proto(args.proto_dir, args.mri_dir, args.subject, args.area_name, args.patch_name, seed=args.seed, split='val',
-                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca)
+                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca,
+                            pca_weights=args.pca_weights)
 
     # for training multi-area model for functional clustering
     # train_dataset = NSD_proto_multiple(args.proto_dir, args.mri_dir, args.subject, ['faces', 'bodies', 'places'], 
@@ -164,10 +163,10 @@ def main(args):
         train_dataset, 
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=True,
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=True
     )
 
@@ -175,10 +174,10 @@ def main(args):
         val_dataset, 
         batch_size=36,
         num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True, 
+        pin_memory=args.pin_mem,
+        drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -187,6 +186,7 @@ def main(args):
 
     model.to(device)
 
+    model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
@@ -236,7 +236,8 @@ def eval(args):
     cudnn.benchmark = True
 
     test_dataset = NSD_proto(args.proto_dir, args.mri_dir, args.subject, args.area_name, args.patch_name, seed=args.seed, split='test',
-                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca)
+                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca,
+                            pca_weights=args.pca_weights)
 
     # test_dataset = Rebuttal_proto(args.proto_dir)
 
@@ -245,15 +246,14 @@ def eval(args):
         # sampler=sampler_val,
         batch_size=36,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
     model = Proto2MRI_conv(num_prototype=args.num_prototype, num_voxels=test_dataset.num_voxels)
-    # model = Dino2MRI_conv(num_feat=args.num_prototype, num_voxels=test_dataset.num_voxels)
 
     model.load_state_dict(torch.load(args.weights, map_location='cpu')['model'], strict=True)
     model.to(device)
@@ -274,7 +274,7 @@ def eval(args):
     record_pred = np.array(record_pred)
     record_gt = np.array(record_gt)    
     mean_ev, voxel_ev = voxelwise_pearsonr(record_pred, record_gt)
-    print(f"Mean explained variance: {mean_ev:.4f}")
+    print(f"Mean voxel-wise Pearson correlation: {mean_ev:.4f}")
 
 
 def get_proto_vector(args):
@@ -288,22 +288,24 @@ def get_proto_vector(args):
 
 
     train_dataset = NSD_proto(args.proto_dir, args.mri_dir, args.subject, args.area_name, args.patch_name, seed=args.seed, split='train',
-                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca)
+                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca,
+                            pca_weights=args.pca_weights)
 
 
     test_dataset = NSD_proto(args.proto_dir, args.mri_dir, args.subject, args.area_name, args.patch_name, seed=args.seed, split='test',
-                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca)
+                            use_raw_feat=args.use_raw_feat, raw_feat_dir=args.raw_feat_dir, selected_hemi=args.hemi, is_pca=args.is_pca,
+                            pca_weights=args.pca_weights)
 
 
     data_loader_train = torch.utils.data.DataLoader(
-        test_dataset, 
+        train_dataset, 
         # sampler=sampler_val,
         batch_size=36,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -313,10 +315,10 @@ def get_proto_vector(args):
         # sampler=sampler_val,
         batch_size=36,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
@@ -375,10 +377,10 @@ def proto_permutation(args):
         all_dataset, 
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False,
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=True
     )
 
@@ -392,9 +394,9 @@ def proto_permutation(args):
     # load selected proto for ablation
     selected_proto = json.load(open(args.selected_proto))
 
-    # for random control
-    all_proto_indices = list(range(args.num_prototype))
-    selected_proto = np.random.choice(all_proto_indices, size=len(selected_proto), replace=False).tolist()
+    # # for random control (optional; currently disabled)
+    # all_proto_indices = list(range(args.num_prototype))
+    # selected_proto = np.random.choice(all_proto_indices, size=len(selected_proto), replace=False).tolist()
 
     selected_proto = torch.tensor(selected_proto, dtype=torch.long)
 
@@ -613,17 +615,17 @@ def get_spatial_attention(args):
         dataset, 
         batch_size=36,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=args.pin_mem,
         drop_last=False, 
         worker_init_fn=worker_init_fn,
-        prefetch_factor=2,
+        prefetch_factor=2 if args.num_workers > 0 else None,
         shuffle=False
     )  
 
     # model = Proto2MRI(num_prototype=args.num_prototype, num_voxels=dataset.num_voxels)
     model = Proto2MRI_conv(num_prototype=args.num_prototype, num_voxels=dataset.num_voxels)
 
-    model_weight = torch.load(args.weights)['model']
+    model_weight = torch.load(args.weights, map_location='cpu')['model']
     model.load_state_dict(model_weight)
     model.to(device)
     model.eval()
@@ -639,13 +641,14 @@ def get_spatial_attention(args):
             # use proto activation
             selected_proto = proto_data[:, :, top_proto]
             att = selected_proto.mean(-1)
-            att /= att.sum(-1, keepdim=True)
+            att /= att.sum(-1, keepdim=True).clamp_min(1e-8)
             att = att.reshape(len(proto_data), 8, 8).numpy()
 
             for i in range(len(att)):
                 attention_map[img_name[i]] = att[i]
 
     # save the attention maps into pickle
+    os.makedirs(os.path.dirname(os.path.abspath(args.save_attention)), exist_ok=True)
     with open(args.save_attention, 'wb') as f:
         pickle.dump(attention_map, f)
 

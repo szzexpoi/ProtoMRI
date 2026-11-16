@@ -1,0 +1,23 @@
+# The upstream DINOv3 package provides CausalSelfAttentionBlock.
+# It requires Python >= 3.11 and compatible PyTorch (see the upstream README).
+dinov3 @ git+https://github.com/facebookresearch/dinov3.git
+# Other dependencies directly imported by ProtoMRI.
+torch>=2.7.1
+torchvision
+numpy
+scipy
+scikit-learn
+joblib
+einops
+h5py
+cachetools
+opencv-python
+Pillow
+tensorboard
+tqdm
+open_clip_torch
+# Analysis notebooks
+matplotlib
+nilearn
+jupyterlab
+ipykernel
